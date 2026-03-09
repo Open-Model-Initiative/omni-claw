@@ -1,13 +1,13 @@
 
-# OmniClaw-Zig-RLM
+# Omni-Claw
 
-OmniClaw-Zig-RLM is an experimental Zig AI agent runtime that integrates
+Omni-Claw is an experimental Zig AI agent runtime that integrates
 with Omni-RLM from the Open Model Initiative.
 
 Omni-RLM:
 https://github.com/Open-Model-Initiative/Omni-RLM/
 
-This project demonstrates how OmniClaw can use Omni-RLM as its reasoning
+This project demonstrates how Omni-Claw can use Omni-RLM as its reasoning
 and planning backend.
 
 ## Features
