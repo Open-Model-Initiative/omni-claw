@@ -36,7 +36,7 @@ Memory Storage
 
 Requirements
 
-- Zig 0.13.0 (pinned via `.mise.toml`)
+- Zig 0.15.1 (latest available patch in the 0.15 line, pinned via `.mise.toml`)
 - Omni-RLM server running (optional; planner has local fallback)
 - Wasmtime
 

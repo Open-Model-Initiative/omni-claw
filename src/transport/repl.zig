@@ -2,8 +2,8 @@ const std = @import("std");
 const Agent = @import("../agent/agent.zig").Agent;
 
 pub fn run(agent: *Agent) !void {
-    const stdin_file = std.io.getStdIn();
-    const stdout_file = std.io.getStdOut();
+    const stdin_file = std.fs.File.stdin();
+    const stdout_file = std.fs.File.stdout();
 
     var line_buf: [2048]u8 = undefined;
 

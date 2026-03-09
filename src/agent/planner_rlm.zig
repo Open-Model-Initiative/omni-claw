@@ -7,17 +7,13 @@ pub const Plan = struct {
 
 pub const Planner = struct {
     allocator: std.mem.Allocator,
-    client: std.http.Client,
 
     pub fn init(allocator: std.mem.Allocator) Planner {
-        return .{
-            .allocator = allocator,
-            .client = .{ .allocator = allocator },
-        };
+        return .{ .allocator = allocator };
     }
 
     pub fn deinit(self: *Planner) void {
-        self.client.deinit();
+        _ = self;
     }
 
     pub fn plan(self: *Planner, prompt: []const u8) !Plan {
@@ -43,30 +39,41 @@ pub const Planner = struct {
         };
         defer self.allocator.free(base_url);
 
-        const uri_text = try std.fmt.allocPrint(self.allocator, "{s}/plan", .{base_url});
-        defer self.allocator.free(uri_text);
+        const endpoint = try std.fmt.allocPrint(self.allocator, "{s}/plan", .{base_url});
+        defer self.allocator.free(endpoint);
 
-        const body = try std.json.stringifyAlloc(self.allocator, .{ .prompt = prompt }, .{});
-        defer self.allocator.free(body);
+        const payload = try std.fmt.allocPrint(self.allocator, "{{\"prompt\":{f}}}", .{std.json.fmt(prompt, .{})});
+        defer self.allocator.free(payload);
 
-        const uri = try std.Uri.parse(uri_text);
-        var server_header_buf: [2048]u8 = undefined;
-        var req = try self.client.open(.POST, uri, .{
-            .server_header_buffer = &server_header_buf,
-            .headers = .{ .content_type = .{ .override = "application/json" } },
-        });
-        defer req.deinit();
+        var child = std.process.Child.init(
+            &.{
+                "curl",
+                "--silent",
+                "--show-error",
+                "--fail",
+                "-X",
+                "POST",
+                "-H",
+                "Content-Type: application/json",
+                "--data",
+                payload,
+                endpoint,
+            },
+            self.allocator,
+        );
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
 
-        req.transfer_encoding = .{ .content_length = body.len };
-        try req.send();
-        try req.writeAll(body);
-        try req.finish();
-        try req.wait();
-
-        if (req.response.status != .ok) return error.InvalidOmniRlmResponse;
-
-        const response = try req.reader().readAllAlloc(self.allocator, 32 * 1024);
+        try child.spawn();
+        const response = try child.stdout.?.readToEndAlloc(self.allocator, 32 * 1024);
         defer self.allocator.free(response);
+
+        const term = try child.wait();
+        switch (term) {
+            .Exited => |code| if (code != 0) return error.InvalidOmniRlmResponse,
+            else => return error.InvalidOmniRlmResponse,
+        }
 
         var parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, response, .{});
         defer parsed.deinit();
