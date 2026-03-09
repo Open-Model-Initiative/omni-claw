@@ -14,11 +14,11 @@ and planning backend.
 
 - Omni-RLM reasoning engine integration (HTTP API)
 - WASM sandbox tool execution
-- Vector memory scaffold
-- SQLite persistence scaffold
-- Plugin tool architecture
-- CLI REPL interface
-- HTTP API scaffolding
+- Omni-RLM planner integration with HTTP fallback behavior
+- Plugin tool architecture via JSON manifests
+- WASM tool execution through Wasmtime
+- CLI REPL interface with interactive commands (`exit`/`quit`)
+- In-process vector cosine similarity utility
 
 ## Architecture
 
@@ -36,18 +36,18 @@ Memory Storage
 
 Requirements
 
-- Zig
-- Omni-RLM server running
-- SQLite
+- Zig 0.13.0 (pinned via `.mise.toml`)
+- Omni-RLM server running (optional; planner has local fallback)
 - Wasmtime
 
 Build
 
-    zig build
+    mise install
+    mise exec -- zig build
 
 Run
 
-    ./zig-out/bin/omniclaw
+    mise exec -- ./zig-out/bin/omniclaw
 
 Example
 
