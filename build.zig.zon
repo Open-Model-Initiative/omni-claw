@@ -1,0 +1,12 @@
+.{
+    .name = .omni_claw,
+    .version = "0.15.2",
+    .dependencies = .{
+        .Omni_RLM = .{
+            .url = "https://github.com/Open-Model-Initiative/Omni-RLM/archive/refs/tags/v_temp.tar.gz",
+            .hash = "Omni_RLM-0.0.0-wUWNVFpjAgCSN4UJ1GaQ_iZpq6bUYpwMPl1Dm3EICPpN",
+        },
+    },
+    .paths = .{""},
+    .fingerprint = 0xbad50a515fdbda8a,
+}

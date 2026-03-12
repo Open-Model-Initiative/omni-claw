@@ -1,5 +1,5 @@
 const std = @import("std");
-const Agent = @import("../agent/agent.zig").Agent;
+const Agent = @import("../agent/mod.zig").Agent;
 
 pub fn run(agent: *Agent) !void {
     const stdin_file = std.fs.File.stdin();
@@ -26,7 +26,13 @@ pub fn run(agent: *Agent) !void {
 
         const line = std.mem.trim(u8, line_buf[0..i], " \t\r\n");
         if (line.len == 0) continue;
-        if (std.mem.eql(u8, line, "exit") or std.mem.eql(u8, line, "quit")) return;
+        if (std.mem.eql(u8, line, "/exit") or std.mem.eql(u8, line, "/quit")) return;
+        
+        // Handle /config command
+        if (std.mem.eql(u8, line, "/config")) {
+            try agent.printConfig();
+            continue;
+        }
 
         try agent.runPrompt(line);
     }
