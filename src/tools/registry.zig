@@ -1,5 +1,11 @@
 const std = @import("std");
 
+/// Tool execution result
+pub const ToolResult = struct {
+    output: []const u8,
+    success: bool,
+};
+
 /// Tool definition structure
 pub const Tool = struct {
     name: []const u8,
@@ -7,8 +13,8 @@ pub const Tool = struct {
     executor: ToolExecutor,
 };
 
-/// Tool executor function type
-pub const ToolExecutor = *const fn (allocator: std.mem.Allocator, argument: []const u8) anyerror!void;
+/// Tool executor function type - returns output as string
+pub const ToolExecutor = *const fn (allocator: std.mem.Allocator, argument: []const u8) anyerror!ToolResult;
 
 /// Tool registry - stores all available tools
 pub const ToolRegistry = struct {
@@ -85,11 +91,13 @@ pub fn createDefaultRegistry(allocator: std.mem.Allocator) !ToolRegistry {
     return registry;
 }
 
-/// Execute bash command
-fn execBash(allocator: std.mem.Allocator, argument: []const u8) !void {
+/// Execute bash command and return output
+fn execBash(allocator: std.mem.Allocator, argument: []const u8) !ToolResult {
     if (argument.len == 0) {
-        std.debug.print("Error: No command provided\n", .{});
-        return;
+        return ToolResult{
+            .output = try allocator.dupe(u8, "Error: No command provided"),
+            .success = false,
+        };
     }
 
     std.debug.print("$ {s}\n", .{argument});
@@ -99,30 +107,57 @@ fn execBash(allocator: std.mem.Allocator, argument: []const u8) !void {
         allocator,
     );
     child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
 
-    const term = try child.spawnAndWait();
+    try child.spawn();
 
-    switch (term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("\n[Exit code: {d}]\n", .{code});
-            }
-        },
-        .Signal => |sig| {
-            std.debug.print("\n[Terminated by signal: {d}]\n", .{sig});
-        },
-        else => {
-            std.debug.print("\n[Process terminated abnormally]\n", .{});
-        },
+    // Read stdout
+    var stdout_buf: [1024 * 1024]u8 = undefined;
+    const stdout_len = try child.stdout.?.readAll(&stdout_buf);
+    const stdout = stdout_buf[0..stdout_len];
+
+    // Read stderr
+    var stderr_buf: [1024 * 1024]u8 = undefined;
+    const stderr_len = try child.stderr.?.readAll(&stderr_buf);
+    const stderr = stderr_buf[0..stderr_len];
+
+    const term = try child.wait();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+
+    if (stdout_len > 0) {
+        try output.appendSlice(allocator, stdout);
     }
+    if (stderr_len > 0) {
+        if (output.items.len > 0) try output.appendSlice(allocator, "\n");
+        try output.appendSlice(allocator, "stderr: ");
+        try output.appendSlice(allocator, stderr);
+    }
+
+    const success = switch (term) {
+        .Exited => |code| code == 0,
+        else => false,
+    };
+
+    if (!success) {
+        try std.fmt.format(output.writer(allocator), "\n[Process exited with error]", .{});
+    }
+
+    return ToolResult{
+        .output = try allocator.dupe(u8, output.items),
+        .success = success,
+    };
 }
 
 /// Finish task with final response
-fn finishTask(allocator: std.mem.Allocator, argument: []const u8) !void {
-    _ = allocator;
-
+fn finishTask(allocator: std.mem.Allocator, argument: []const u8) !ToolResult {
     // Print the final response
     std.debug.print("{s}\n", .{argument});
+
+    return ToolResult{
+        .output = try allocator.dupe(u8, argument),
+        .success = true,
+    };
 }

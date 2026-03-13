@@ -4,3 +4,5 @@ zig-out/
 logs
 .env
 .DS_Store
+.omniclaw
+.vscode

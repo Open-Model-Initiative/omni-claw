@@ -60,6 +60,9 @@ pub const Runtime = struct {
         std.debug.print("OmniClaw-Zig-RLM runtime started\n", .{});
 
         try self.handleConfiguration();
+        try self.copyToolsDir();
+
+        try std.process.changeCurDir(OMNICLAW_DIR);
         try Repl.run(self.agent);
     }
 
@@ -288,6 +291,48 @@ pub const Runtime = struct {
             try dst_file.writeAll(content[0..bytes_read]);
         }
     }
+
+    fn copyToolsDir(self: Runtime) !void {
+        const src_dir_path = "src/tools";
+        const dst_dir_path = ".omniclaw/tools";
+
+        // Create destination directory if it doesn't exist
+        std.fs.cwd().makeDir(dst_dir_path) catch |err| {
+            if (err != error.PathAlreadyExists) return err;
+        };
+
+        try self.copyDirRecursive(src_dir_path, dst_dir_path);
+    }
+
+    fn copyDirRecursive(self: Runtime, src_path: []const u8, dst_path: []const u8) !void {
+        var src_dir = try std.fs.cwd().openDir(src_path, .{ .iterate = true });
+        defer src_dir.close();
+
+        var dst_dir = try std.fs.cwd().openDir(dst_path, .{});
+        defer dst_dir.close();
+
+        var iter = src_dir.iterate();
+        while (try iter.next()) |entry| {
+            const src_entry_path = try std.fs.path.join(self.allocator, &.{ src_path, entry.name });
+            defer self.allocator.free(src_entry_path);
+            const dst_entry_path = try std.fs.path.join(self.allocator, &.{ dst_path, entry.name });
+            defer self.allocator.free(dst_entry_path);
+
+            switch (entry.kind) {
+                .file => {
+                    try self.copyFile(src_entry_path, dst_entry_path);
+                },
+                .directory => {
+                    dst_dir.makeDir(entry.name) catch |err| {
+                        if (err != error.PathAlreadyExists) return err;
+                    };
+                    try self.copyDirRecursive(src_entry_path, dst_entry_path);
+                },
+                else => {},
+            }
+        }
+    }
+
     fn fileExists(path: []const u8) bool {
         const file = std.fs.cwd().openFile(path, .{}) catch return false;
         file.close();

@@ -1,7 +1,9 @@
 const std = @import("std");
 
 const Planner = @import("planner.zig").Planner;
+const PlanResult = @import("planner.zig").PlanResult;
 const ToolRegistry = @import("../tools/registry.zig").ToolRegistry;
+const ToolResult = @import("../tools/registry.zig").ToolResult;
 const createDefaultRegistry = @import("../tools/registry.zig").createDefaultRegistry;
 
 const Config = @import("../omniclaw.zig").Config;
@@ -87,26 +89,86 @@ pub const Agent = struct {
         try stdout_file.writeAll("\n=======================\n\n");
     }
 
+
+
     pub fn runPrompt(self: *Agent, prompt: []const u8) !void {
-        const plan = try self.planner.plan(prompt);
-        defer self.allocator.free(plan.tool);
+        // Initialize conversation
+        try self.planner.initializeConversation(prompt);
 
-        // Execute the tool directly using registry
-        const tool_def = self.registry.get(plan.tool) orelse {
-            std.debug.print("Error: Unknown tool '{s}'\n", .{plan.tool});
-            std.debug.print("Available tools: ", .{});
+        // Execute recursively until finish
+        var result = try self.executeRecursive();
+        defer result.deinit(self.allocator);
 
-            var it = self.registry.tools.iterator();
-            var first = true;
-            while (it.next()) |entry| {
-                if (!first) std.debug.print(", ", .{});
-                first = false;
-                std.debug.print("{s}", .{entry.value_ptr.name});
-            }
-            std.debug.print("\n", .{});
-            return error.UnknownTool;
+        // Print final result summary
+        std.debug.print("\n=== Task Completed ===\n", .{});
+        std.debug.print("Final answer: {s}\n", .{result.final_output});
+        std.debug.print("Total tool calls: {d}\n", .{result.tool_calls.items.len});
+        for (result.tool_calls.items, 0..) |call, i| {
+            std.debug.print("  {d}. {s} -> {s} ({s})\n", .{
+                i + 1,
+                call.tool,
+                if (call.success) "success" else "failed",
+                call.argument,
+            });
+        }
+    }
+
+    /// Execute tool using the registry
+    fn executeToolWithRegistry(self: *Agent, tool_name: []const u8, argument: []const u8) !ToolResult {
+        const tool_def = self.registry.get(tool_name) orelse {
+            return ToolResult{
+                .output = try std.fmt.allocPrint(self.allocator, "Error: Unknown tool '{s}'", .{tool_name}),
+                .success = false,
+            };
         };
 
-        try tool_def.executor(self.allocator, plan.argument);
+        return try tool_def.executor(self.allocator, argument);
+    }
+
+    /// Execute plans recursively until finish tool is called
+    fn executeRecursive(self: *Agent) !PlanResult {
+        var tool_calls: std.ArrayList(@import("planner.zig").ToolCallRecord) = .empty;
+        errdefer {
+            for (tool_calls.items) |*call| {
+                call.deinit(self.allocator);
+            }
+            tool_calls.deinit(self.allocator);
+        }
+
+        var iteration: usize = 0;
+        const max_iterations = self.planner.max_iterations;
+
+        while (iteration < max_iterations) : (iteration += 1) {
+            // Get next plan from LLM
+            const plan = try self.planner.getNextPlan();
+            defer self.allocator.free(plan.tool);
+            defer self.allocator.free(plan.argument);
+
+            // Check if this is the finish tool
+            if (std.mem.eql(u8, plan.tool, "finish")) {
+                return PlanResult{
+                    .final_output = try self.allocator.dupe(u8, plan.argument),
+                    .tool_calls = tool_calls,
+                };
+            }
+
+            // Execute the tool
+            const tool_result = try self.executeToolWithRegistry(plan.tool, plan.argument);
+            defer self.allocator.free(tool_result.output);
+
+            // Record the tool call
+            try tool_calls.append(self.allocator, .{
+                .tool = try self.allocator.dupe(u8, plan.tool),
+                .argument = try self.allocator.dupe(u8, plan.argument),
+                .result = try self.allocator.dupe(u8, tool_result.output),
+                .success = tool_result.success,
+            });
+
+            // Add result to message history for next iteration
+            try self.planner.addToolResult(plan.tool, tool_result.output, tool_result.success);
+        }
+
+        // Max iterations reached
+        return error.MaxIterationsReached;
     }
 };

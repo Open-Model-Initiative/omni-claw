@@ -15,9 +15,11 @@ Omni-Claw provides an AI agent architecture where:
 
 ## Features
 
-- **LLM-powered planning**: Integrates with OpenAI-compatible APIs (OpenAI, Moonshot, etc.) or local endpoints (Ollama)
+- **LLM-powered recursive planning**: Integrates with OpenAI-compatible APIs (OpenAI, Moonshot, etc.) or local endpoints (Ollama). The planner can execute multiple tools recursively until the task is complete.
 - **Interactive REPL**: Full-featured terminal interface with line editing, history (↑/↓), and UTF-8 support
 - **Tool registry**: Extensible tool system with built-in `exec` and `finish` tools
+- **Tool documentation lookup**: LLM can read detailed tool documentation from `tools/docs/<tool>.md` files
+- **Conversation logging**: Automatic persistence of conversation history to `logs/conversation.jsonl`
 - **Automatic configuration**: Interactive setup on first run with persistent config storage
 - **Secure API key handling**: API keys are masked in display and stored separately
 
@@ -43,15 +45,25 @@ src/
 ### Data Flow
 
 ```
-User Input → REPL → Agent.runPrompt() → Planner.plan()
+User Input → REPL → Agent.runPrompt() → Planner.initializeConversation()
                                               ↓
-                                      Read src/tools/tools.md
+                              Load conversation history from logs/conversation.jsonl
+                                              ↓
+                                      Read tools/tools.md
                                               ↓
                                       LLM API (Omni-RLM) → JSON Plan
                                               ↓
-                                      Tool Registry Lookup
+                                      Tool Registry Lookup & Execution
                                               ↓
-                                      Tool Execution (bash or final answer)
+                            ┌──────────────────────────────────────────┐
+                            │  Recursive Planning Loop (max 10 iter)   │
+                            │  - Execute tool → Get result             │
+                            │  - Append result to message history      │
+                            │  - Call LLM for next plan                │
+                            │  - Repeat until 'finish' tool            │
+                            └──────────────────────────────────────────┘
+                                              ↓
+                                      Save conversation to log
                                               ↓
                                         Output Result
 ```
@@ -155,6 +167,11 @@ drwxr-xr-x  12 user  staff   384 Mar 13 14:30 .
 drwxr-xr-x   5 user  staff   160 Mar 13 14:00 ..
 ...
 
+> cat README.md | head -20
+$ cat README.md | head -20
+# Omni-Claw
+Omni-Claw is an experimental Zig-based AI agent runtime...
+
 > /config
 
 === Current Configuration ===
@@ -187,13 +204,33 @@ Omni-Claw uses a tool registry system to manage available tools.
 | `exec` | Execute bash commands in the current environment (ls, cat, grep, etc.) |
 | `finish` | Provide final answer and complete the task (for explanations, analysis) |
 
+### Tool Documentation
+
+The LLM can access detailed tool documentation by reading files from `tools/docs/<tool>.md`. For example:
+- `tools/docs/exec.md` - Detailed documentation for the exec tool
+- `tools/docs/finish.md` - Documentation for the finish tool
+
+When adding new tools, create a corresponding `.md` file in `tools/docs/` with usage examples and parameter descriptions.
+
 ### Adding Custom Tools
 
 1. **Update `src/tools/tools.md`** - Add tool to the list
 2. **Create `src/tools/docs/<tool>.md`** - Add detailed documentation
 3. **Edit `src/tools/registry.zig`**:
-   - Implement executor function
+   - Implement executor function (must return `ToolResult`)
    - Register in `createDefaultRegistry()`
+
+Example tool executor:
+```zig
+fn myToolExecutor(allocator: std.mem.Allocator, argument: []const u8) !ToolResult {
+    // Your tool logic here
+    const output = try std.fmt.allocPrint(allocator, "Result: {s}", .{argument});
+    return ToolResult{
+        .output = output,
+        .success = true,
+    };
+}
+```
 
 ## Configuration
 
@@ -215,6 +252,31 @@ DAYTONA_API_KEY=           # Optional
 | `OMNIRLM_API_KEY` | API key for hosted services | (none) |
 | `OMNIRLM_MODEL_NAME` | Model name | `kimi-k2.5` |
 | `DAYTONA_API_KEY` | Daytona sandbox API key | (none) |
+
+## Conversation Logging
+
+Omni-Claw automatically persists conversation history to `logs/conversation.jsonl`. This enables:
+
+- **Context across sessions**: Previous conversations are loaded when starting a new session
+- **Audit trail**: Review all tool calls and their results
+- **Debugging**: Inspect the full conversation flow
+
+### Log Format
+
+The log file uses JSON Lines format (one JSON object per line):
+
+```jsonl
+{"role":"user","content":"ls -la"}
+{"role":"assistant","content":"{\"tool\":\"exec\",\"argument\":\"ls -la\"}"}
+{"role":"user","content":"Tool 'exec' executed. Success: true. Result: ..."}
+{"role":"assistant","content":"{\"tool\":\"finish\",\"argument\":\"Done\"}"}
+```
+
+### Log Location
+
+- Default path: `logs/conversation.jsonl`
+- The `logs/` directory is created automatically on first use
+- To clear history, simply delete this file
 
 ## Testing
 
@@ -243,6 +305,7 @@ See `src/omniclaw.zig` for the full public API exports.
 - **API Keys**: Stored in `.omniclaw/.env` (gitignored). Keys are masked when displayed.
 - **Bash Execution**: The `exec` tool has full system access. Use with caution.
 - **Configuration**: `.env` and `.omniclaw/.env` are gitignored to prevent credential leaks.
+- **Conversation Logs**: The `logs/` directory contains conversation history and is gitignored. Be aware that logs may contain sensitive information from tool outputs.
 
 ## Dependencies
 
