@@ -13,7 +13,32 @@ pub const Config = struct {
     base_url: []const u8,
     api_key: ?[]const u8,
     model_name: []const u8,
-    daytona_key: ?[]const u8,
+
+    pub fn print(self: Config, writer: anytype) !void {
+        try writer.writeAll("LLM Provider: OpenAI-compatible API\n");
+        try writer.writeAll("Base URL: ");
+        try writer.writeAll(self.base_url);
+        try writer.writeAll("\n");
+
+        try writer.writeAll("API Key: ");
+        if (self.api_key) |key| {
+            // Mask the API key for security
+            if (key.len > 8) {
+                try writer.writeAll(key[0..4]);
+                try writer.writeAll("...");
+                try writer.writeAll(key[key.len - 4 ..]);
+            } else {
+                try writer.writeAll("(set)");
+            }
+        } else {
+            try writer.writeAll("(not set)");
+        }
+        try writer.writeAll("\n");
+
+        try writer.writeAll("Model: ");
+        try writer.writeAll(self.model_name);
+        try writer.writeAll("\n");
+    }
 };
 
 pub const Runtime = struct {
@@ -131,14 +156,9 @@ pub const Runtime = struct {
         const model_input = try readLineAlloc(self.allocator, 256);
         const model_name = if (model_input.len == 0) default_model else model_input;
 
-        // Step 5: Optional Daytona API key
-        try stdout_file.writeAll("\nDaytona API key (optional, press Enter to skip): ");
-        const daytona_input = try readLineAlloc(self.allocator, 1024);
-        const daytona_key = if (daytona_input.len == 0) null else daytona_input;
-
         // Create .omniclaw directory and save configuration
         try self.createOmniclawDir();
-        try self.saveEnvFile(base_url, owned_api_key, model_name, daytona_key);
+        try self.saveEnvFile(base_url, owned_api_key, model_name);
 
         try stdout_file.writeAll("\n✓ Configuration saved to .omniclaw/.env\n");
         try stdout_file.writeAll("\nYou can edit this file manually or run again to reconfigure.\n\n");
@@ -148,13 +168,12 @@ pub const Runtime = struct {
             .base_url = try self.allocator.dupe(u8, base_url),
             .api_key = if (owned_api_key) |key| key else null,
             .model_name = try self.allocator.dupe(u8, model_name),
-            .daytona_key = if (daytona_key) |key| try self.allocator.dupe(u8, key) else null,
         };
     }
 
     fn applyConfig(self: *Runtime, config: Config) !void {
         const stdout_file = std.fs.File.stdout();
-        try self.agent.configureLlmConnection(config.base_url, config.api_key, config.model_name);
+        try self.agent.configureLlmConnection(config);
         try stdout_file.writeAll("Configuration loaded successfully.\n\n");
     }
 
@@ -166,13 +185,11 @@ pub const Runtime = struct {
         var base_url: ?[]u8 = null;
         var api_key: ?[]u8 = null;
         var model_name: ?[]u8 = null;
-        var daytona_key: ?[]u8 = null;
 
         errdefer {
             if (base_url) |v| self.allocator.free(v);
             if (api_key) |v| self.allocator.free(v);
             if (model_name) |v| self.allocator.free(v);
-            if (daytona_key) |v| self.allocator.free(v);
         }
 
         var lines = std.mem.splitScalar(u8, content, '\n');
@@ -193,12 +210,6 @@ pub const Runtime = struct {
             } else if (std.mem.startsWith(u8, trimmed, "OMNIRLM_MODEL_NAME=")) {
                 const value = trimmed["OMNIRLM_MODEL_NAME=".len..];
                 model_name = try self.allocator.dupe(u8, std.mem.trim(u8, value, " \""));
-            } else if (std.mem.startsWith(u8, trimmed, "DAYTONA_API_KEY=")) {
-                const value = trimmed["DAYTONA_API_KEY=".len..];
-                const trimmed_value = std.mem.trim(u8, value, " \"");
-                if (trimmed_value.len > 0) {
-                    daytona_key = try self.allocator.dupe(u8, trimmed_value);
-                }
             }
         }
 
@@ -206,11 +217,10 @@ pub const Runtime = struct {
             .base_url = base_url orelse try self.allocator.dupe(u8, "http://127.0.0.1:11435"),
             .api_key = api_key,
             .model_name = model_name orelse try self.allocator.dupe(u8, "kimi-k2.5"),
-            .daytona_key = daytona_key,
         };
     }
 
-    fn saveEnvFile(self: *Runtime, base_url: []const u8, api_key: ?[]const u8, model_name: []const u8, daytona_key: ?[]const u8) !void {
+    fn saveEnvFile(self: *Runtime, base_url: []const u8, api_key: ?[]const u8, model_name: []const u8) !void {
         _ = self;
 
         const file = try std.fs.cwd().createFile(ENV_FILE_PATH, .{});
@@ -239,17 +249,6 @@ pub const Runtime = struct {
         try file.writeAll("OMNIRLM_MODEL_NAME=");
         try file.writeAll(model_name);
         try file.writeAll("\n\n");
-
-        // Write Daytona API key
-        if (daytona_key) |key| {
-            try file.writeAll("# Daytona API key (optional)\n");
-            try file.writeAll("DAYTONA_API_KEY=");
-            try file.writeAll(key);
-            try file.writeAll("\n");
-        } else {
-            try file.writeAll("# Daytona API key (optional)\n");
-            try file.writeAll("DAYTONA_API_KEY=\n");
-        }
     }
 
     // =========================================================================
@@ -289,29 +288,28 @@ pub const Runtime = struct {
             try dst_file.writeAll(content[0..bytes_read]);
         }
     }
-};
-
-fn fileExists(path: []const u8) bool {
-    const file = std.fs.cwd().openFile(path, .{}) catch return false;
-    file.close();
-    return true;
-}
-
-fn readLineAlloc(allocator: std.mem.Allocator, max_len: usize) ![]u8 {
-    const stdin_file = std.fs.File.stdin();
-
-    const raw_line = try allocator.alloc(u8, max_len);
-    defer allocator.free(raw_line);
-
-    var len: usize = 0;
-    while (len < max_len) {
-        var byte: [1]u8 = undefined;
-        const n = try stdin_file.read(&byte);
-        if (n == 0) break;
-        if (byte[0] == '\n') break;
-        raw_line[len] = byte[0];
-        len += 1;
+    fn fileExists(path: []const u8) bool {
+        const file = std.fs.cwd().openFile(path, .{}) catch return false;
+        file.close();
+        return true;
     }
 
-    return allocator.dupe(u8, std.mem.trim(u8, raw_line[0..len], " \t\r\n"));
-}
+    fn readLineAlloc(allocator: std.mem.Allocator, max_len: usize) ![]u8 {
+        const stdin_file = std.fs.File.stdin();
+
+        const raw_line = try allocator.alloc(u8, max_len);
+        defer allocator.free(raw_line);
+
+        var len: usize = 0;
+        while (len < max_len) {
+            var byte: [1]u8 = undefined;
+            const n = try stdin_file.read(&byte);
+            if (n == 0) break;
+            if (byte[0] == '\n') break;
+            raw_line[len] = byte[0];
+            len += 1;
+        }
+
+        return allocator.dupe(u8, std.mem.trim(u8, raw_line[0..len], " \t\r\n"));
+    }
+};

@@ -4,43 +4,13 @@ const Planner = @import("planner.zig").Planner;
 const ToolRegistry = @import("../tools/registry.zig").ToolRegistry;
 const createDefaultRegistry = @import("../tools/registry.zig").createDefaultRegistry;
 
+const Config = @import("../omniclaw.zig").Config;
+
 pub const Agent = struct {
     allocator: std.mem.Allocator,
     planner: Planner,
     registry: ToolRegistry,
     config: ?Config,
-
-    pub const Config = struct {
-        base_url: []const u8,
-        api_key: ?[]const u8,
-        model_name: []const u8,
-
-        pub fn print(self: Config, writer: anytype) !void {
-            try writer.writeAll("LLM Provider: OpenAI-compatible API\n");
-            try writer.writeAll("Base URL: ");
-            try writer.writeAll(self.base_url);
-            try writer.writeAll("\n");
-
-            try writer.writeAll("API Key: ");
-            if (self.api_key) |key| {
-                // Mask the API key for security
-                if (key.len > 8) {
-                    try writer.writeAll(key[0..4]);
-                    try writer.writeAll("...");
-                    try writer.writeAll(key[key.len - 4 ..]);
-                } else {
-                    try writer.writeAll("(set)");
-                }
-            } else {
-                try writer.writeAll("(not set)");
-            }
-            try writer.writeAll("\n");
-
-            try writer.writeAll("Model: ");
-            try writer.writeAll(self.model_name);
-            try writer.writeAll("\n");
-        }
-    };
 
     pub fn init(allocator: std.mem.Allocator) !Agent {
         return Agent{
@@ -61,7 +31,7 @@ pub const Agent = struct {
         }
     }
 
-    pub fn configureLlmConnection(self: *Agent, base_url: []const u8, api_key: ?[]const u8, model_name: ?[]const u8) !void {
+    pub fn configureLlmConnection(self: *Agent, config: Config) !void {
         // Store config for later display
         if (self.config) |*cfg| {
             self.allocator.free(cfg.base_url);
@@ -70,12 +40,12 @@ pub const Agent = struct {
         }
 
         self.config = Config{
-            .base_url = try self.allocator.dupe(u8, base_url),
-            .api_key = if (api_key) |key| try self.allocator.dupe(u8, key) else null,
-            .model_name = try self.allocator.dupe(u8, model_name orelse "kimi-k2.5"),
+            .base_url = try self.allocator.dupe(u8, config.base_url),
+            .api_key = if (config.api_key) |key| try self.allocator.dupe(u8, key) else null,
+            .model_name = try self.allocator.dupe(u8, config.model_name),
         };
 
-        try self.planner.setConnectionConfig(base_url, api_key, model_name);
+        try self.planner.setConnectionConfig(config);
     }
 
     pub fn printConfig(self: *Agent) !void {

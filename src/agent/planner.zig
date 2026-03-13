@@ -1,4 +1,5 @@
 const std = @import("std");
+const Config = @import("../omniclaw.zig").Config;
 const RLM = @import("omni-rlm").RLM;
 const Log = @import("omni-rlm").RLMLogger;
 
@@ -76,20 +77,15 @@ pub const Planner = struct {
         if (self.rlm) |*rlm| rlm.deinit();
     }
 
-    pub fn setConnectionConfig(self: *Planner, base_url: []const u8, api_key: ?[]const u8, model_name: ?[]const u8) !void {
+    pub fn setConnectionConfig(self: *Planner, config: Config) !void {
         self.model = ModelHandler{
-            .base_url = base_url,
-            .api_key = api_key.?,
-            .model_name = model_name.?,
+            .base_url = config.base_url,
+            .api_key = config.api_key.?,
+            .model_name = config.model_name,
         };
     }
 
     pub fn plan(self: *Planner, prompt: []const u8) !Plan {
-        // TODO repeated code with executor - need to refactor to avoid duplication
-        if (prompt.len == 0) {
-            return Plan{ .tool = try self.allocator.dupe(u8, "exec"), .argument = try self.allocator.dupe(u8, "echo 'No command provided'") };
-        }
-
         var messages: std.ArrayList(Message) = .empty;
         defer messages.deinit(self.allocator);
         try messages.append(self.allocator, Message{
@@ -102,7 +98,6 @@ pub const Planner = struct {
         });
 
         const response = try self.model.make_request(messages.items, self.allocator);
-        // response = response[8 .. response.len - 4]; // Strip code block markdown
 
         const parsed: std.json.Parsed(Plan) = try std.json.parseFromSlice(
             Plan,
