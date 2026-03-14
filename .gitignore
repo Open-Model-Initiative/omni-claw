@@ -1,3 +1,8 @@
 .zig-cache/
 zig-out/
 *.o
+logs
+.env
+.DS_Store
+.omniclaw
+.vscode
