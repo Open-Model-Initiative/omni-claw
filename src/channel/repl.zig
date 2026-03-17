@@ -3,7 +3,6 @@ const Agent = @import("../agent/mod.zig").Agent;
 
 const MAX_HISTORY = 100;
 const MAX_LINE_LEN = 2048;
-const CONVERSATION_LOG_PATH = @import("../agent/planner.zig").CONVERSATION_LOG_PATH;
 
 // UTF-8 character state for multi-byte character handling
 const Utf8State = struct {

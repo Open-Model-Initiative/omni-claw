@@ -2,6 +2,7 @@ const std = @import("std");
 
 const Agent = @import("../agent/mod.zig").Agent;
 const Repl = @import("../channel/repl.zig");
+const CONVERSATION_LOG_PATH = @import("../agent/planner.zig").CONVERSATION_LOG_PATH;
 
 // Configuration paths
 const OMNICLAW_DIR = ".omniclaw";
@@ -73,7 +74,27 @@ pub const Runtime = struct {
         try self.copyToolsDir();
 
         try std.process.changeCurDir(OMNICLAW_DIR);
+        const load_conversation = try self.askLoadConversation();
+        try self.prepareConversationLog(load_conversation);
         try Repl.run(&self.agent);
+    }
+
+    fn askLoadConversation(self: *Runtime) !bool {
+        const stdout_file = std.fs.File.stdout();
+        try stdout_file.writeAll("Load existing conversation? [y/N]: ");
+        const input = try readLineAlloc(self.allocator, 32);
+        defer self.allocator.free(input);
+
+        return std.ascii.eqlIgnoreCase(input, "y") or std.ascii.eqlIgnoreCase(input, "yes");
+    }
+
+    fn prepareConversationLog(self: *Runtime, load_last_conversation: bool) !void {
+        _ = self;
+        if (!load_last_conversation) {
+            std.fs.cwd().deleteFile(CONVERSATION_LOG_PATH) catch |err| {
+                if (err != error.FileNotFound) return err;
+            };
+        }
     }
 
     // =========================================================================
