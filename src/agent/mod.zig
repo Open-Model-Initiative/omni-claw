@@ -102,17 +102,20 @@ pub const Agent = struct {
         std.debug.print("Final answer: {s}\n", .{result.final_output});
         std.debug.print("Total tool calls: {d}\n", .{result.tool_calls.items.len});
         for (result.tool_calls.items, 0..) |call, i| {
+            // Join arguments for display
+            const arg_str = try std.mem.join(self.allocator, " ", call.arguments.items);
+            defer self.allocator.free(arg_str);
             std.debug.print("  {d}. {s} -> {s} ({s})\n", .{
                 i + 1,
                 call.tool,
                 if (call.success) "success" else "failed",
-                call.argument,
+                arg_str,
             });
         }
     }
 
     /// Execute tool using the registry
-    fn executeToolWithRegistry(self: *Agent, tool_name: []const u8, argument: []const u8) !ToolResult {
+    fn executeToolWithRegistry(self: *Agent, tool_name: []const u8, arguments: std.ArrayList([]const u8)) !ToolResult {
         const tool_def = self.registry.get(tool_name) orelse {
             return ToolResult{
                 .output = try std.fmt.allocPrint(self.allocator, "Error: Unknown tool '{s}'", .{tool_name}),
@@ -120,7 +123,7 @@ pub const Agent = struct {
             };
         };
 
-        return try tool_def.executor(self.allocator, argument);
+        return try tool_def.executor(self.allocator, arguments);
     }
 
     /// Execute plans recursively until finish tool is called
@@ -138,26 +141,27 @@ pub const Agent = struct {
 
         while (iteration < max_iterations) : (iteration += 1) {
             // Get next plan from LLM
-            const plan = try self.planner.getNextPlan();
-            defer self.allocator.free(plan.tool);
-            defer self.allocator.free(plan.argument);
+            var plan = try self.planner.getNextPlan();
 
             // Check if this is the finish tool
             if (std.mem.eql(u8, plan.tool, "finish")) {
+                // Join arguments for final output
+                const final_output = try std.mem.join(self.allocator, " ", plan.arguments.items);
+                defer self.allocator.free(final_output);
                 return PlanResult{
-                    .final_output = try self.allocator.dupe(u8, plan.argument),
+                    .final_output = try self.allocator.dupe(u8, final_output),
                     .tool_calls = tool_calls,
                 };
             }
 
             // Execute the tool
-            const tool_result = try self.executeToolWithRegistry(plan.tool, plan.argument);
+            const tool_result = try self.executeToolWithRegistry(plan.tool, plan.arguments);
             defer self.allocator.free(tool_result.output);
 
             // Record the tool call
             try tool_calls.append(self.allocator, .{
                 .tool = try self.allocator.dupe(u8, plan.tool),
-                .argument = try self.allocator.dupe(u8, plan.argument),
+                .arguments = try plan.arguments.clone(self.allocator),
                 .result = try self.allocator.dupe(u8, tool_result.output),
                 .success = tool_result.success,
             });

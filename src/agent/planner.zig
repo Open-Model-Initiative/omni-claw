@@ -8,18 +8,29 @@ const Message = @import("omni-rlm").Message;
 
 pub const Plan = struct {
     tool: []const u8,
-    argument: []const u8,
+    arguments: std.ArrayList([]const u8),
+
+    pub fn deinit(self: *Plan, allocator: std.mem.Allocator) void {
+        for (self.arguments.items) |arg| {
+            allocator.free(arg);
+        }
+        self.arguments.deinit(allocator);
+        allocator.free(self.tool);
+    }
 };
 
 pub const ToolCallRecord = struct {
     tool: []const u8,
-    argument: []const u8,
+    arguments: std.ArrayList([]const u8),
     result: []const u8,
     success: bool,
 
     pub fn deinit(self: *ToolCallRecord, allocator: std.mem.Allocator) void {
         allocator.free(self.tool);
-        allocator.free(self.argument);
+        for (self.arguments.items) |arg| {
+            allocator.free(arg);
+        }
+        self.arguments.deinit(allocator);
         allocator.free(self.result);
     }
 };
@@ -42,20 +53,19 @@ const ParsedPlanResponse = struct {
     sanitized_response: []const u8,
 
     pub fn deinit(self: *ParsedPlanResponse, allocator: std.mem.Allocator) void {
-        allocator.free(self.plan.tool);
-        allocator.free(self.plan.argument);
+        self.plan.deinit(allocator);
         allocator.free(self.sanitized_response);
     }
 };
 
 // Paths to tool documentation
-const TOOLS_MD_PATH = "tools/tools.md";
+const TOOLS_MD_PATH = "tools/TOOLS.md";
 const TOOLS_DOCS_DIR = "tools/docs/";
 
 // Conversation log path
 pub const CONVERSATION_LOG_PATH = "logs/conversation.jsonl";
 
-const STAGE1_SYSTEM_PROMPT =
+const SYSTEM_PROMPT =
     \\You are omniclaw, an AI agent assistant. Your task is to analyze user requests and select the appropriate tool to execute.
     \\
     \\Available tools:
@@ -71,7 +81,7 @@ const STAGE1_SYSTEM_PROMPT =
     \\3. Return your response in this JSON format:
     \\{{
     \\    "tool": "<tool_name>",
-    \\    "argument": "<arg1> <arg2> ..."
+    \\    "arguments": ["<arg1>", "<arg2>", "..."]
     \\}}
     \\
     \\After you execute a tool and receive results, continue planning if more information is needed.
@@ -82,7 +92,7 @@ const STAGE1_SYSTEM_PROMPT =
     \\- Provide your final response using the "finish" tool:
     \\{{
     \\    "tool": "finish",
-    \\    "argument": "A brief summary of the findings and the complete answer to the user's request"
+    \\    "arguments": ["A brief summary of the findings and the complete answer to the user's request. Please reply in the same language as the user's original request."]
     \\}}
     \\
     \\Important: 
@@ -101,7 +111,7 @@ fn build_system_prompt(allocator: std.mem.Allocator) ![]const u8 {
     defer allocator.free(tools_md_buf);
     _ = try tools_md.readAll(tools_md_buf);
 
-    return try std.fmt.allocPrint(allocator, STAGE1_SYSTEM_PROMPT, .{ tools_md_buf, TOOLS_DOCS_DIR, TOOLS_DOCS_DIR });
+    return try std.fmt.allocPrint(allocator, SYSTEM_PROMPT, .{ tools_md_buf, TOOLS_DOCS_DIR, TOOLS_DOCS_DIR });
 }
 
 pub const Planner = struct {
@@ -375,12 +385,18 @@ pub const Planner = struct {
         return try extractFirstJsonObject(allocator, trimmed);
     }
 
+    // JSON structure for parsing plan response
+    const JsonPlan = struct {
+        tool: []const u8,
+        arguments: [][]const u8,
+    };
+
     fn parsePlanResponse(self: *Planner, response: []const u8) !ParsedPlanResponse {
         const sanitized_response = try sanitizePlanResponse(self.allocator, response);
         errdefer self.allocator.free(sanitized_response);
 
-        const parsed: std.json.Parsed(Plan) = try std.json.parseFromSlice(
-            Plan,
+        const parsed: std.json.Parsed(JsonPlan) = try std.json.parseFromSlice(
+            JsonPlan,
             self.allocator,
             sanitized_response,
             .{},
@@ -390,13 +406,24 @@ pub const Planner = struct {
         const tool = try self.allocator.dupe(u8, parsed.value.tool);
         errdefer self.allocator.free(tool);
 
-        const argument = try self.allocator.dupe(u8, parsed.value.argument);
-        errdefer self.allocator.free(argument);
+        // Convert arguments array to ArrayList
+        var arguments = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (arguments.items) |arg| {
+                self.allocator.free(arg);
+            }
+            arguments.deinit(self.allocator);
+        }
+
+        for (parsed.value.arguments) |arg| {
+            const arg_copy = try self.allocator.dupe(u8, arg);
+            try arguments.append(self.allocator, arg_copy);
+        }
 
         return ParsedPlanResponse{
             .plan = .{
                 .tool = tool,
-                .argument = argument,
+                .arguments = arguments,
             },
             .sanitized_response = sanitized_response,
         };
@@ -410,10 +437,9 @@ pub const Planner = struct {
         });
         defer self.allocator.free(response);
 
-        const parsed_response = try self.parsePlanResponse(response);
+        var parsed_response = try self.parsePlanResponse(response);
         // plan fields are returned to caller; free them on error
-        errdefer self.allocator.free(parsed_response.plan.tool);
-        errdefer self.allocator.free(parsed_response.plan.argument);
+        errdefer parsed_response.plan.deinit(self.allocator);
         // free sanitized_response on error until ownership transfers to messages
 
         // Store assistant's response in message history
@@ -450,56 +476,5 @@ pub const Planner = struct {
 
         // Save to conversation log
         try self.appendMessageToLog("user", content);
-    }
-
-    /// Execute plan recursively until finish tool is called or max iterations reached
-    pub fn executeRecursive(self: *Planner, execute_tool: *const fn (allocator: std.mem.Allocator, tool: []const u8, argument: []const u8) anyerror!@import("../tools/registry.zig").ToolResult) !PlanResult {
-        const ToolResult = @import("../tools/registry.zig").ToolResult;
-        var tool_calls: std.ArrayList(ToolCallRecord) = .empty;
-        errdefer {
-            for (tool_calls.items) |*call| {
-                call.deinit(self.allocator);
-            }
-            tool_calls.deinit(self.allocator);
-        }
-
-        var iteration: usize = 0;
-        while (iteration < self.max_iterations) : (iteration += 1) {
-            // Get next plan from LLM
-            const current_plan = try self.getNextPlan();
-
-            // Check if this is the finish tool
-            if (std.mem.eql(u8, current_plan.tool, "finish")) {
-                const result = PlanResult{
-                    .final_output = try self.allocator.dupe(u8, current_plan.argument),
-                    .tool_calls = tool_calls,
-                };
-                self.allocator.free(current_plan.tool);
-                self.allocator.free(current_plan.argument);
-                return result;
-            }
-
-            // Execute the tool
-            const tool_result: ToolResult = try execute_tool(self.allocator, current_plan.tool, current_plan.argument);
-            defer self.allocator.free(tool_result.output);
-
-            // Record the tool call
-            try tool_calls.append(self.allocator, .{
-                .tool = try self.allocator.dupe(u8, current_plan.tool),
-                .argument = try self.allocator.dupe(u8, current_plan.argument),
-                .result = try self.allocator.dupe(u8, tool_result.output),
-                .success = tool_result.success,
-            });
-
-            // Add result to message history for next iteration
-            try self.addToolResult(current_plan.tool, tool_result.output, tool_result.success);
-
-            // Clean up plan
-            self.allocator.free(current_plan.tool);
-            self.allocator.free(current_plan.argument);
-        }
-
-        // Max iterations reached
-        return error.MaxIterationsReached;
     }
 };
