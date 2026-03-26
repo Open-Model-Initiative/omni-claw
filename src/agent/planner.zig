@@ -1,7 +1,5 @@
 const std = @import("std");
 const Config = @import("../omniclaw.zig").Config;
-const RLM = @import("omni-rlm").RLM;
-const Log = @import("omni-rlm").RLMLogger;
 
 const ModelHandler = @import("omni-rlm").ModelHandler;
 const Message = @import("omni-rlm").Message;
@@ -116,7 +114,6 @@ fn build_system_prompt(allocator: std.mem.Allocator) ![]const u8 {
 
 pub const Planner = struct {
     allocator: std.mem.Allocator,
-    rlm: ?RLM,
     model: ModelHandler,
     messages: std.ArrayList(Message),
     max_iterations: usize,
@@ -125,7 +122,6 @@ pub const Planner = struct {
     pub fn init(allocator: std.mem.Allocator, max_iterations: usize) Planner {
         return .{
             .allocator = allocator,
-            .rlm = null,
             .model = ModelHandler{},
             .messages = std.ArrayList(Message).empty,
             .max_iterations = max_iterations,
@@ -134,7 +130,6 @@ pub const Planner = struct {
     }
 
     pub fn deinit(self: *Planner) void {
-        if (self.rlm) |*rlm| rlm.deinit();
         for (self.messages.items) |msg| {
             self.allocator.free(msg.role);
             self.allocator.free(msg.content);
@@ -450,13 +445,13 @@ pub const Planner = struct {
             }
             result.deinit(allocator);
         }
-        
+
         for (list.items) |item| {
             const item_copy = try allocator.dupe(u8, item);
             errdefer allocator.free(item_copy);
             try result.append(allocator, item_copy);
         }
-        
+
         return result;
     }
 
@@ -477,7 +472,7 @@ pub const Planner = struct {
         // Clone sanitized_response since we need to keep it for both messages and log
         const content_copy = try self.allocator.dupe(u8, parsed_response.sanitized_response);
         errdefer self.allocator.free(content_copy);
-        
+
         try self.messages.append(self.allocator, Message{
             .role = assistant_role,
             .content = content_copy,
@@ -489,7 +484,7 @@ pub const Planner = struct {
         const tool_copy = try self.allocator.dupe(u8, parsed_response.plan.tool);
         errdefer self.allocator.free(tool_copy);
         const args_copy = try cloneStringList(self.allocator, parsed_response.plan.arguments);
-        
+
         return Plan{
             .tool = tool_copy,
             .arguments = args_copy,
