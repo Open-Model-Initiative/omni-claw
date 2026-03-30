@@ -4,11 +4,11 @@ This document lists all available tools in the Omni-Claw system.
 
 ## Available Tools
 
-| Tool Name | Category  | Description                                         | Doc Path             |
-| --------- | --------- | --------------------------------------------------- | -------------------- |
-| exec      | system    | Execute bash commands in the current environment    | tools/docs/exec.md   |
-| finish    | control   | Provide final answer and complete the task          | tools/docs/finish.md |
-| rlm       | reasoning | Process ultra-long material with grounded reasoning | tools/docs/rlm.md    |
+| Tool Name | Category  | Description                                         | Doc Path                 |
+| --------- | --------- | --------------------------------------------------- | ------------------------ |
+| exec      | system    | Execute bash commands in the current environment    | src/tools/docs/exec.md   |
+| finish    | control   | Provide final answer and complete the task          | src/tools/docs/finish.md |
+| rlm       | reasoning | Process ultra-long material with grounded reasoning | src/tools/docs/rlm.md    |
 
 ---
 
